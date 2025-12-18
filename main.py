@@ -1,3 +1,4 @@
+from OpenGL.arrays import vbo
 from PyQt5 import QtCore, QtWidgets  # core Qt functionality
 from PyQt5 import QtGui  # extends QtCore with GUI functionality
 from PyQt5 import QtOpenGL  # provides QGLWidget, a special OpenGL QWidget
@@ -16,13 +17,12 @@ from AppWindow import MainWindow
 import math
 import sys  # we'll need this later to run our Qt application
 
-from object_constructors import create_cube, create_dxf_object, create_sphere, create_pyramid, create_detector, \
-    create_event
+from object_constructors import create_dxf_object, create_sphere, create_pyramid, create_detector, \
+    create_event, create_point, create_beach_ball_hosohedron, create_enhanced_sphere
 from utilities import screen_pos_to_vector
 
 # Камера работает как орбитальная - вращается вокруг целевого объекта (viewTarget)
 
-# TODO : MAKE THIS SHIT LOOK BETTER
 # основной виджет для 3D отображения
 class GLWidget(QtOpenGL.QGLWidget):
     ROT_Y_MIN = math.pi * (0.1 / 360)
@@ -72,8 +72,10 @@ class GLWidget(QtOpenGL.QGLWidget):
     def initializeGL(self):
         self.qglClearColor(QtGui.QColor(152, 221, 250))
         gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
 
-        #self._init_geometry("../korkino_model.dxf")
+        # self._init_geometry("../korkino_model.dxf")
         gl.glPushMatrix()
 
     # обработка изменения размера окна, настройка перспективы
@@ -188,17 +190,16 @@ class GLWidget(QtOpenGL.QGLWidget):
         gl.glPushMatrix()
 
         gl.glTranslate(*obj.location)
-
         gl.glRotatef(obj.rotation[0], 1.0, 0.0, 0.0)
         gl.glRotatef(obj.rotation[1], 0.0, 1.0, 0.0)
         gl.glRotatef(obj.rotation[2], 0.0, 0.0, 1.0)
         gl.glScale(*obj.scale)
-        #gl.glTranslate(*(obj.origin * -1))
+
         obj.mesh.verticesVBO.bind()
         gl.glVertexPointer(3, gl.GL_FLOAT, 0, obj.mesh.verticesVBO)
 
-
-        if self.ENABLE_FACES and (obj.mesh.facesQuads is not None or obj.mesh.facesTriangles is not None) and obj.mesh.enableFaces:
+        # Сначала грани (если включено)
+        if self.ENABLE_FACES and obj.mesh.enableFaces:
             obj.mesh.colorsFacesVBO.bind()
             gl.glColorPointer(4, gl.GL_FLOAT, 0, obj.mesh.colorsFacesVBO)
 
@@ -212,14 +213,14 @@ class GLWidget(QtOpenGL.QGLWidget):
 
             obj.mesh.colorsFacesVBO.unbind()
 
-        if obj.hover or self.ENABLE_EDGES and obj.mesh.edges is not None and obj.mesh.enableEdges:
+        # Затем ребра (если включено) - ТОЛЬКО ДЛЯ DXF, НЕ ДЛЯ СОБЫТИЙ
+        if self.ENABLE_EDGES and obj.mesh.enableEdges and obj.mesh.edges is not None and obj.obj_type != "event":
             obj.mesh.colorsEdgesActiveVBO.bind()
             gl.glColorPointer(3, gl.GL_FLOAT, 0, obj.mesh.colorsEdgesActiveVBO)
             gl.glDrawElements(gl.GL_LINES, len(obj.mesh.edges), gl.GL_UNSIGNED_INT, obj.mesh.edges)
             obj.mesh.colorsEdgesActiveVBO.unbind()
 
         obj.mesh.verticesVBO.unbind()
-
         gl.glPopMatrix()
 
     # вычисление позиции камеры вокруг целевого объекта
@@ -247,9 +248,72 @@ class GLWidget(QtOpenGL.QGLWidget):
         gl.glEnableClientState(gl.GL_VERTEX_ARRAY)
         gl.glEnableClientState(gl.GL_COLOR_ARRAY)
 
-        for obj in self.objects:
-            if self.objects[obj].enabled and self.objects[obj].mesh.enabled:
-                self.draw_object(self.objects[obj])
+        # УВЕЛИЧИВАЕМ ТОЛЩИНУ ЛИНИЙ ДЛЯ ЛУЧШЕЙ ВИДИМОСТИ
+        gl.glLineWidth(2.0)
+
+        # РАЗДЕЛЯЕМ ОБЪЕКТЫ НА НЕПРОЗРАЧНЫЕ И ПРОЗРАЧНЫЕ
+        opaque_objects = []
+        transparent_objects = []
+
+        camera_pos = np.array([self.camX, self.camY, self.camZ])
+
+        for obj in self.objects.values():
+            if obj.enabled and obj.mesh.enabled:
+                # Определяем прозрачность объекта
+                is_transparent = False
+                if hasattr(obj, 'current_opacity'):
+                    is_transparent = obj.current_opacity < 0.99
+
+                if is_transparent:
+                    # Вычисляем расстояние до камеры для сортировки
+                    obj_pos = np.array([obj.matrix[3].x, obj.matrix[3].y, obj.matrix[3].z])
+                    distance = np.linalg.norm(camera_pos - obj_pos)
+                    transparent_objects.append((distance, obj))
+                else:
+                    opaque_objects.append(obj)
+
+        # Сначала рисуем все непрозрачные объекты
+        for obj in opaque_objects:
+            if obj.obj_type == "event" and hasattr(obj, 'draw_outline'):
+                gl.glPushMatrix()
+                gl.glTranslate(*obj.location)
+                gl.glRotatef(obj.rotation[0], 1.0, 0.0, 0.0)
+                gl.glRotatef(obj.rotation[1], 0.0, 1.0, 0.0)
+                gl.glRotatef(obj.rotation[2], 0.0, 0.0, 1.0)
+                obj.draw_outline()
+                gl.glPopMatrix()
+
+            self.draw_object(obj)
+
+        # Включаем смешивание для прозрачных объектов
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+
+        # Отключаем запись глубины для прозрачных объектов
+        gl.glDepthMask(gl.GL_FALSE)
+
+        # Сортируем прозрачные объекты по расстоянию (от дальних к ближним)
+        transparent_objects.sort(key=lambda x: x[0], reverse=True)
+
+        # Рисуем прозрачные объекты
+        for distance, obj in transparent_objects:
+            if obj.obj_type == "event" and hasattr(obj, 'draw_outline'):
+                gl.glPushMatrix()
+                gl.glTranslate(*obj.location)
+                gl.glRotatef(obj.rotation[0], 1.0, 0.0, 0.0)
+                gl.glRotatef(obj.rotation[1], 0.0, 1.0, 0.0)
+                gl.glRotatef(obj.rotation[2], 0.0, 0.0, 1.0)
+                obj.draw_outline()
+                gl.glPopMatrix()
+
+            self.draw_object(obj)
+
+        # Восстанавливаем запись глубины
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glDisable(gl.GL_BLEND)
+
+        # ВОССТАНАВЛИВАЕМ ТОЛЩИНУ ЛИНИЙ ПО УМОЛЧАНИЮ
+        gl.glLineWidth(1.0)
 
         gl.glDisableClientState(gl.GL_VERTEX_ARRAY)
         gl.glDisableClientState(gl.GL_COLOR_ARRAY)
@@ -274,10 +338,20 @@ class GLWidget(QtOpenGL.QGLWidget):
 
         self.objects[obj.id] = obj
 
-    def add_object_event(self, x, y, z, event_type, energy):
+    def add_object_event(self, x, y, z, event_type, energy, custom_color=None):
         print(f"Добавление события: X={x}, Y={y}, Z={z}, тип={event_type}, энергия={energy}")
 
-        obj = create_event(x, y, z, event_type, energy)
+        # Передаем кастомный цвет если указан
+        if custom_color is not None:
+            # custom_color должен быть в формате RGBA [r, g, b, a]
+            if len(custom_color) == 3:
+                # Если только RGB, добавляем альфа=1.0
+                rgba_color = custom_color + [1.0]
+            else:
+                rgba_color = custom_color
+            obj = create_event(x, y, z, event_type, energy, rgba_color)
+        else:
+            obj = create_event(x, y, z, event_type, energy)
 
         # Базовые множители для разных типов событий
         type_multipliers = {
@@ -301,9 +375,145 @@ class GLWidget(QtOpenGL.QGLWidget):
         obj.scale = np.array([s, s, s])
         obj.calculate_matrix()
 
+        # СОХРАНЯЕМ БАЗОВЫЙ ЦВЕТ И ПРОЗРАЧНОСТЬ ДЛЯ ДИНАМИЧЕСКОГО ОСВЕЩЕНИЯ
+        obj.base_color = [1.0, 0.0, 0.0]  # будет переопределено свойствами
+        obj.current_opacity = 1.0
+
         # Добавляем объект
         self.objects[obj.id] = obj
         print(f"Объект добавлен с ID: {obj.id}, всего объектов: {len(self.objects)}\n")
+
+    def add_object_beach_ball(self, x, y, z, event_type, energy, custom_color=None):
+        """Добавляет пляжный мячик с возможностью указать цвет и прозрачность"""
+        print(f"Добавление пляжного мячика: X={x}, Y={y}, Z={z}")
+
+        # Используем кастомный цвет или цвет по энергии
+        if custom_color is not None:
+            base_color = custom_color
+        else:
+            # Определяем цвет по энергии
+            if energy > 100000000000:
+                base_color = [1.0, 0.0, 0.0, 1.0]
+            elif energy > 1000000000:
+                base_color = [1.0, 0.5, 0.0, 1.0]
+            elif energy > 100000000:
+                base_color = [1.0, 1.0, 0.0, 1.0]
+            elif energy > 1000000:
+                base_color = [0.0, 1.0, 0.0, 1.0]
+            elif energy > 1000:
+                base_color = [0.0, 0.0, 1.0, 1.0]
+            else:
+                base_color = [0.5, 0.5, 0.5, 1.0]
+
+        # ⚠️ ГАРАНТИРУЕМ ЧТО ЦВЕТ В RGBA ФОРМАТЕ
+        if len(base_color) == 3:
+            base_color = base_color + [1.0]
+
+        obj = create_beach_ball_hosohedron(base_color)
+        obj.location = np.array([x, y, z])
+        obj.obj_type = "event"
+        obj.data["type"] = event_type
+        obj.data["energy"] = energy
+        obj.data["visualization"] = "beach_ball"
+
+        # Размер пляжного мячика
+        type_multipliers = {
+            "explosion": 3.0,
+            "earthquake": 1.5,
+            "microseismic": 0.8,
+            "unknown": 0.5
+        }
+
+        multiplier = type_multipliers.get(event_type, 1.5)
+        s = math.fabs(math.log(energy)) * multiplier if energy > 0 else 1.0
+        s = min(s, 100.0)
+
+        obj.scale = np.array([s, s, s])
+        obj.calculate_matrix()
+
+        self.objects[obj.id] = obj
+        print(f"✅ Пляжный мячик с прозрачностью {base_color[3]} добавлен с ID: {obj.id}")
+        return obj
+
+    def add_object_point(self, x, y, z, event_type, energy, custom_color=None):
+        """Добавляет точку с возможностью указать цвет и прозрачность"""
+        print(f"Добавление точки: X={x}, Y={y}, Z={z}")
+
+        # Используем кастомный цвет или цвет по энергии
+        if custom_color is not None:
+            base_color = custom_color
+        else:
+            # Определяем цвет по энергии
+            if energy > 100000000000:
+                base_color = [1.0, 0.0, 0.0, 1.0]
+            elif energy > 1000000000:
+                base_color = [1.0, 0.5, 0.0, 1.0]
+            elif energy > 100000000:
+                base_color = [1.0, 1.0, 0.0, 1.0]
+            elif energy > 1000000:
+                base_color = [0.0, 1.0, 0.0, 1.0]
+            elif energy > 1000:
+                base_color = [0.0, 0.0, 1.0, 1.0]
+            else:
+                base_color = [0.5, 0.5, 0.5, 1.0]
+
+        # ⚠️ ГАРАНТИРУЕМ ЧТО ЦВЕТ В RGBA ФОРМАТЕ
+        if len(base_color) == 3:
+            base_color = base_color + [1.0]
+
+        obj = create_point(base_color)
+        obj.location = np.array([x, y, z])
+        obj.obj_type = "event"
+        obj.data["type"] = event_type
+        obj.data["energy"] = energy
+        obj.data["visualization"] = "point"
+
+        # Фиксированный размер для точек
+        s = 5.0
+        obj.scale = np.array([s, s, s])
+        obj.calculate_matrix()
+
+        self.objects[obj.id] = obj
+        print(f"✅ Точка с прозрачностью {base_color[3]} добавлена с ID: {obj.id}")
+        return obj
+
+    def add_object_point(self, x, y, z, event_type, energy, custom_color=None):
+        """Добавляет событие в виде точки"""
+        print(f"Добавление точки: X={x}, Y={y}, Z={z}")
+
+        if custom_color is not None:
+            base_color = custom_color
+        else:
+            # Определяем цвет по энергии
+            if energy > 100000000000:
+                base_color = [1.0, 0.0, 0.0, 1.0]
+            elif energy > 1000000000:
+                base_color = [1.0, 0.5, 0.0, 1.0]
+            elif energy > 100000000:
+                base_color = [1.0, 1.0, 0.0, 1.0]
+            elif energy > 1000000:
+                base_color = [0.0, 1.0, 0.0, 1.0]
+            elif energy > 1000:
+                base_color = [0.0, 0.0, 1.0, 1.0]
+            else:
+                base_color = [0.5, 0.5, 0.5, 1.0]
+
+        obj = create_point(base_color)
+        obj.location = np.array([x, y, z])
+        obj.obj_type = "event"
+        obj.data["type"] = event_type
+        obj.data["energy"] = energy
+        obj.data["visualization"] = "point"  # Сохраняем тип визуализации
+
+        # Фиксированный маленький размер для точек
+        s = 5.0  # Все точки одинакового маленького размера
+
+        obj.scale = np.array([s, s, s])
+        obj.calculate_matrix()
+
+        self.objects[obj.id] = obj
+        print(f"Точка добавлена с ID: {obj.id}")
+        return obj
 
     def _init_geometry(self, filepath):
         obj1 = create_dxf_object(filepath, False)
@@ -353,39 +563,9 @@ class GLWidget(QtOpenGL.QGLWidget):
     def setArm(self, val):
         self.armLength = 20 + val
 
-    def add_debug_markers(self):
-        """Добавляет маркеры для отладки расположения"""
-        print("=== ДОБАВЛЯЕМ ОТЛАДОЧНЫЕ МАРКЕРЫ ===")
-
-        # ВСЕ маркеры одного размера (например 300)
-        marker_size = 300.0
-
-        # 1. Маркер в центре DXF модели (красный)
-        center_obj = create_sphere(16, 16, [1.0, 0.0, 0.0, 1.0])
-        center_obj.location = np.array([91163.9, 32.9, 88332.0])
-        center_obj.scale = np.array([marker_size, marker_size, marker_size])  # Одинаковый размер
-        center_obj.calculate_matrix()
-        self.objects[center_obj.id] = center_obj
-
-        # 2. Маркер в начале координат (зеленый)
-        origin_obj = create_sphere(16, 16, [0.0, 1.0, 0.0, 1.0])
-        origin_obj.location = np.array([0.0, 0.0, 0.0])
-        origin_obj.scale = np.array([marker_size, marker_size, marker_size])  # Одинаковый размер
-        origin_obj.calculate_matrix()
-        self.objects[origin_obj.id] = origin_obj
-
-        # 3. Маркер в типичном месте события (синий)
-        event_obj = create_sphere(16, 16, [0.0, 0.0, 1.0, 1.0])
-        event_obj.location = np.array([91789.2, 88537.1, -147.3])
-        event_obj.scale = np.array([marker_size, marker_size, marker_size])  # Одинаковый размер
-        event_obj.calculate_matrix()
-        self.objects[event_obj.id] = event_obj
-
-
 if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
     win = MainWindow(GLWidget())
     win.show()
 
     sys.exit(app.exec_())
-

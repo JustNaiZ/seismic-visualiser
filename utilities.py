@@ -40,4 +40,3 @@ def screen_pos_to_vector(x, y, width, height, camera, target):
     ray_end_world /= ray_start_world.w
 
     return glm.normalize(glm.vec3(ray_end_world - ray_start_world))
-

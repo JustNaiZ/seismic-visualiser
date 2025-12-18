@@ -1,16 +1,14 @@
-import numpy as np
-
 class ObjectMesh:
     def __init__(self, vertices, colors, faces_t=None, faces_q=None, edges=None):
-        self.enableFaces = False
+        self.enableFaces = True
         self.enableEdges = True
 
         self.verticesVBO = vertices
         self.colorsFacesVBO = colors
-        self.colorsEdgesVBO = colors
+        self.colorsEdgesVBO = colors  # Будет переопределено
         self.colorsHoveredVBO = colors
         self.colorsSelectedVBO = colors
-        self.colorsEdgesActiveVBO = colors
+        self.colorsEdgesActiveVBO = colors  # Будет переопределено
 
         self.facesQuads = faces_q
         self.facesTriangles = faces_t
@@ -22,4 +20,4 @@ class ObjectMesh:
         self.colorsEdgesActiveVBO = self.colorsHoveredVBO
 
     def on_unhover(self):
-        self.colorsEdgesActiveVBO = self.colorsEdgesVBO
+        self.colorsEdgesActiveVBO = self.colorsEdgesVBO  # Возвращаем цвет ребер

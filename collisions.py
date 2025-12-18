@@ -7,5 +7,3 @@ class CollisionBox:
 
         self.pointBegin = poingBegin
         self.pointEnd = pointEnd
-
-

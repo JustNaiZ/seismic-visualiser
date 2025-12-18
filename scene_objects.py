@@ -15,6 +15,7 @@ class SceneObject:
     def __init__(self, mesh, collision, origin=np.array([0.0, 0.0, 0.0]), obj_type="misc", data={}):
         self.enabled = True
         self.hover = False
+        self.current_opacity = 1.0
 
         self.mesh = mesh
         self.collision = collision
@@ -73,5 +74,3 @@ class SceneEvent(SceneObject):
         self.location_error = 0
         self.energy = 0
         self.L = 0
-
-

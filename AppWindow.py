@@ -4,6 +4,9 @@ import csv
 from PyQt5 import QtCore, QtWidgets, QtGui
 import numpy as np
 
+from TreeProject import TreeProject
+from properties_field import PropertiesField
+
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, glWidget):
@@ -13,23 +16,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle('Seismic Visualiser')
 
         self.glWidget = glWidget
-        self.project_data = {}  # Хранит информацию о загруженных файлах
-        self.loaded_files = {}  # Хранит информацию о загруженных файлах и их объектах
+        self.loaded_files = {}
 
-        # Создаем treeView
-        self.treeView = QtWidgets.QTreeView()
-        self.model = QtGui.QStandardItemModel()
-        self.model.setHorizontalHeaderLabels(["Открытые проекты"])
-        self.treeView.setModel(self.model)
+        # Создаем treeView через новый класс
+        self.treeView = TreeProject(self)
 
-        # Настраиваем treeView
-        self.treeView.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        self.treeView.setHeaderHidden(False)
-        self.treeView.setAlternatingRowColors(True)
-        self.treeView.setAnimated(True)
-
-        # Подключаем обработчики событий
-        self.treeView.clicked.connect(self.on_treeview_clicked)
+        # Создаем поле свойств
+        self.properties_field = PropertiesField(self)
 
         # Инициализируем меню и тулбар
         self.menuBar = self.menuBar()
@@ -41,6 +34,136 @@ class MainWindow(QtWidgets.QMainWindow):
         self.initGUI()
         self.initTimer()
 
+    def initMenu(self):
+        fileMenu = self.menuBar.addMenu('Файл')
+        viewMenu = self.menuBar.addMenu('Вид')
+
+        # Новые действия для файлового меню
+        createProjectAction = QtWidgets.QAction('Создать проект', self)
+        openProjectAction = QtWidgets.QAction('Открыть проект', self)
+
+        createProjectAction.triggered.connect(self.treeView.create_project)
+        openProjectAction.triggered.connect(self.treeView.open_project)
+
+        # Действия для управления видом
+        expandAllAction = QtWidgets.QAction('Раскрыть все', self)
+        collapseAllAction = QtWidgets.QAction('Свернуть все', self)
+        refreshAction = QtWidgets.QAction('Обновить проекты', self)
+
+        expandAllAction.triggered.connect(self.treeView.expandAll)
+        collapseAllAction.triggered.connect(self.treeView.collapseAll)
+        refreshAction.triggered.connect(self.treeView.refresh_projects)
+
+        fileMenu.addAction(createProjectAction)
+        fileMenu.addAction(openProjectAction)
+
+        viewMenu.addSeparator()
+        viewMenu.addAction(expandAllAction)
+        viewMenu.addAction(collapseAllAction)
+        viewMenu.addAction(refreshAction)
+
+    def initToolBar(self):
+        self.menuToolBar = QtWidgets.QToolBar('Меню с иконками')
+        self.menuToolBar.setMovable(False)
+        self.addToolBar(QtCore.Qt.TopToolBarArea, self.menuToolBar)
+
+        # Загружаем кастомные иконки для видов
+        try:
+            # Иконка для "Показать все" (вид спереди/изометрический)
+            icon_show_all = QtGui.QIcon('icons/y.png')
+            # Иконка для "Вид сверху"
+            icon_top_view = QtGui.QIcon('icons/z.png')
+            # Иконка для "Вид сбоку"
+            icon_side_view = QtGui.QIcon('icons/x.png')
+        except:
+            # Если иконки не найдены, используем стандартные
+            icon_show_all = self.style().standardIcon(QtWidgets.QStyle.SP_ComputerIcon)
+            icon_top_view = self.style().standardIcon(QtWidgets.QStyle.SP_ArrowUp)
+            icon_side_view = self.style().standardIcon(QtWidgets.QStyle.SP_ArrowLeft)
+
+        # Создаем действия с кастомными иконками
+        proj_yx = QtWidgets.QAction(icon_show_all, 'Показать все', self)
+        proj_zx = QtWidgets.QAction(icon_top_view, 'Вид сверху', self)
+        proj_yz = QtWidgets.QAction(icon_side_view, 'Вид сбоку', self)
+
+        # Для обновления используем стандартную круговую стрелку
+        refresh_action = QtWidgets.QAction(self.style().standardIcon(QtWidgets.QStyle.SP_BrowserReload),
+                                           'Обновить проекты', self)
+
+        self.menuToolBar.setIconSize(QtCore.QSize(24, 24))
+
+        proj_yx.setToolTip('Показать все (изометрический вид)')
+        proj_zx.setToolTip('Вид сверху')
+        proj_yz.setToolTip('Вид сбоку')
+        refresh_action.setToolTip('Обновить список проектов')
+
+        proj_yx.triggered.connect(lambda val: self.glWidget.setArm(val))
+        proj_zx.triggered.connect(lambda checked: self.glWidget.set_perspective_top())
+        proj_yz.triggered.connect(lambda val: self.glWidget.set_perspective_side())
+        refresh_action.triggered.connect(self.treeView.refresh_projects)
+
+        # Добавляем все кнопки в тулбар
+        self.menuToolBar.addAction(proj_yx)
+        self.menuToolBar.addAction(proj_zx)
+        self.menuToolBar.addAction(proj_yz)
+        self.menuToolBar.addSeparator()
+        self.menuToolBar.addAction(refresh_action)
+
+    def initGUI(self):
+        central_widget = QtWidgets.QWidget()
+        gui_layout = QtWidgets.QHBoxLayout()
+        central_widget.setLayout(gui_layout)
+        self.setCentralWidget(central_widget)
+
+        # Создаем главный горизонтальный splitter
+        main_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+
+        # ЛЕВАЯ ПАНЕЛЬ: вертикальный splitter для дерева и свойств
+        left_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+
+        # Верхняя часть: дерево проектов
+        self.treeView.setMinimumWidth(250)
+        self.treeView.setMaximumWidth(600)
+
+        # Нижняя часть: поле свойств (изначально скрыто, но добавлено в layout)
+        self.properties_field.setMinimumHeight(150)
+        self.properties_field.setMaximumHeight(400)
+
+        # Добавляем оба виджета в вертикальный splitter
+        left_splitter.addWidget(self.treeView)
+        left_splitter.addWidget(self.properties_field)
+
+        # Устанавливаем начальные размеры (дерево занимает больше места)
+        left_splitter.setSizes([400, 100])
+
+        # ПРАВАЯ ПАНЕЛЬ: 3D вид
+        right_widget = QtWidgets.QWidget()
+        right_layout = QtWidgets.QVBoxLayout(right_widget)
+        right_layout.addWidget(self.glWidget)
+
+        # Добавляем виджеты в главный splitter
+        main_splitter.addWidget(left_splitter)  # Теперь здесь вертикальный splitter
+        main_splitter.addWidget(right_widget)  # 3D вид
+
+        # Устанавливаем начальные размеры
+        main_splitter.setSizes([300, 500])
+
+        gui_layout.addWidget(main_splitter)
+
+        # Скрываем поле свойств по умолчанию (но оно уже в layout)
+        self.properties_field.hide()
+
+        # Сохраняем ссылки для дальнейшего использования
+        self.main_splitter = main_splitter
+        self.left_splitter = left_splitter
+
+    def initTimer(self):
+        timer = QtCore.QTimer(self)
+        timer.setInterval(20)  # 20 мс
+        timer.timeout.connect(self.glWidget.updateGL)
+        timer.start()
+
+    # Все остальные методы остаются без изменений
     def parse_evp_file(self, file_path):
         """Парсинг .evp файла с сейсмическими событиями"""
         try:
@@ -62,6 +185,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
             events_data = []
             events_count = 0
+
+            # ДОБАВЛЯЕМ СТАТИСТИКУ ПО КООРДИНАТАМ
+            all_x, all_y, all_z = [], [], []
+
             for line_num, line in enumerate(file_content, 1):
                 line = line.strip()
 
@@ -85,6 +212,11 @@ class MainWindow(QtWidgets.QMainWindow):
                     x = float(parts[3])  # Координата X
                     y = float(parts[4])  # Координата Y
                     z = float(parts[5])  # Координата Z (глубина)
+
+                    # Сохраняем координаты для статистики
+                    all_x.append(x)
+                    all_y.append(y)
+                    all_z.append(z)
 
                     # Ищем энергию в следующих колонках (может быть в разных позициях)
                     energy = 0.0
@@ -134,6 +266,13 @@ class MainWindow(QtWidgets.QMainWindow):
                     continue
 
             print(f"Загружено {events_count} событий из {file_path}")
+            if all_x:
+                print(f"=== EVP ФАЙЛ: {os.path.basename(file_path)} ===")
+                print(f"Количество событий: {len(all_x)}")
+                print(f"Координата X: min={min(all_x):.1f}, max={max(all_x):.1f}, avg={np.mean(all_x):.1f}")
+                print(f"Координата Y: min={min(all_y):.1f}, max={max(all_y):.1f}, avg={np.mean(all_y):.1f}")
+                print(f"Координата Z: min={min(all_z):.1f}, max={max(all_z):.1f}, avg={np.mean(all_z):.1f}")
+                print("=" * 50)
             return events_data
 
         except Exception as e:
@@ -151,134 +290,112 @@ class MainWindow(QtWidgets.QMainWindow):
 
         return new_x, new_y, new_z
 
-    def is_supported_file(self, filename):
-        """Проверяет, поддерживается ли файл приложением"""
-        supported_extensions = ['.dxf', '.evp', '.evg', '.csv']
-        file_ext = os.path.splitext(filename)[1].lower()
-        return file_ext in supported_extensions
+    def addToProject(self):
+        """Добавляет файлы в выбранный проект (работает с любыми папками)"""
+        # Получаем текущий выделенный элемент
+        current_index = self.treeView.currentIndex()
 
-    def openProject(self):
-        folder_path = QtWidgets.QFileDialog.getExistingDirectory(self, "Выберите папку")
-        if not folder_path:
+        # СТРОГАЯ ПРОВЕРКА: должен быть выделен конкретный элемент
+        if not current_index.isValid():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Проект не выбран",
+                "Сначала ВЫДЕЛИТЕ проект в списке 'Открытые проекты'!\n\n"
+                "Кликните ЛЕВОЙ кнопкой мыши на названии проекта, "
+                "чтобы он был выделен синим цветом, затем ПКМ для вызова меню."
+            )
             return
 
-        # Проверяем что папка существует и доступна
-        if not os.path.exists(folder_path):
-            QtWidgets.QMessageBox.warning(self, "Ошибка", "Выбранная папка не существует")
-            return
-
-        # Сохраняем информацию о проекте
-        self.project_data[folder_path] = {
-            'dxf_files': [],
-            'evp_files': [],
-            'csv_files': []
-        }
-
-        # Добавляем проект в дерево с чекбоксами (изначально выключены)
-        self.add_project_to_tree(folder_path)
-
-        QtWidgets.QMessageBox.information(self, "Успех", "Проект успешно загружен в дерево! Включите файлы галочками.")
-
-    def add_project_to_tree(self, folder_path):
-        """Добавляет проект в дерево с возможностью включения/выключения"""
-        rootNode = self.model.invisibleRootItem()
-        project_name = os.path.basename(folder_path)
-
-        # Создаем элемент проекта БЕЗ чекбокса (только для корневой папки)
-        project_item = QtGui.QStandardItem(project_name)
-        project_item.setCheckable(False)  # Убираем чекбокс у корневой папки
-        project_item.setData(folder_path, QtCore.Qt.UserRole)
-        project_item.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DirIcon))
-
-        rootNode.appendRow(project_item)
-
-        # РЕКУРСИВНО добавляем всё содержимое папки (файлы и подпапки)
-        self.add_folder_contents_recursive(project_item, folder_path)
-
-        # Раскрываем проект по умолчанию
-        self.treeView.expand(project_item.index())
-
-    def add_folder_contents_recursive(self, parent_item, folder_path):
-        """РЕКУРСИВНО добавляет всё содержимое папки в дерево"""
-        try:
-            for entry in sorted(os.listdir(folder_path)):
-                entry_path = os.path.join(folder_path, entry)
-
-                # Пропускаем системные файлы и папки
-                if entry.startswith('.') or entry in ['__pycache__', 'venv', '.venv']:
-                    continue
-
-                if os.path.isdir(entry_path):
-                    # Для папок - создаем элемент и РЕКУРСИВНО добавляем содержимое
-                    folder_item = QtGui.QStandardItem(entry)
-                    folder_item.setData(entry_path, QtCore.Qt.UserRole)
-                    folder_item.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DirIcon))
-
-                    parent_item.appendRow(folder_item)
-
-                    # РЕКУРСИВНЫЙ вызов для подпапок
-                    self.add_folder_contents_recursive(folder_item, entry_path)
-
-                else:
-                    # Для файлов - проверяем поддерживается ли формат
-                    if self.is_supported_file(entry):
-                        # Поддерживаемые файлы - с чекбоксом
-                        file_item = QtGui.QStandardItem(entry)
-                        file_item.setCheckable(True)
-                        file_item.setCheckState(QtCore.Qt.Unchecked)
-                        file_item.setData(entry_path, QtCore.Qt.UserRole)
-                        file_item.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_FileIcon))
-
-                        # Сохраняем информацию о файле
-                        file_ext = os.path.splitext(entry)[1].lower()
-                        project_path = self.find_project_root(parent_item)
-
-                        if project_path and project_path in self.project_data:
-                            if file_ext == '.dxf':
-                                self.project_data[project_path]['dxf_files'].append(entry_path)
-                            elif file_ext in ['.evp', '.evg']:
-                                self.project_data[project_path]['evp_files'].append(entry_path)
-                            elif file_ext == '.csv':
-                                self.project_data[project_path]['csv_files'].append(entry_path)
-
-                        parent_item.appendRow(file_item)
-                    else:
-                        # Неподдерживаемые файлы - без чекбокса и серым цветом
-                        file_item = QtGui.QStandardItem(entry)
-                        file_item.setEnabled(False)
-                        file_item.setForeground(QtGui.QColor(128, 128, 128))
-                        file_item.setData(entry_path, QtCore.Qt.UserRole)
-                        file_item.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_FileIcon))
-                        parent_item.appendRow(file_item)
-
-        except PermissionError:
-            print(f"Нет доступа к папке: {folder_path}")
-        except Exception as e:
-            print(f"Ошибка при добавлении файлов в дерево: {e}")
-
-    def find_project_root(self, item):
-        """Находит корневую папку проекта для элемента"""
-        # Поднимаемся вверх по дереву до корневой папки проекта
-        current = item
-        while current:
-            project_path = current.data(QtCore.Qt.UserRole)
-            if project_path and project_path in self.project_data:
-                return project_path
-            current = current.parent()
-        return None
-
-    def on_treeview_clicked(self, index):
-        """Обработчик клика по дереву - ТОЛЬКО для чекбоксов"""
-        item = self.model.itemFromIndex(index)
+        item = self.treeView.model.itemFromIndex(current_index)
         if item is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Не удалось определить выбранный проект!"
+            )
             return
 
-        # Обрабатываем ТОЛЬКО если элемент имеет чекбокс (файлы)
-        if item.isCheckable():
-            file_path = item.data(QtCore.Qt.UserRole)
-            if file_path and os.path.isfile(file_path):
-                is_checked = item.checkState() == QtCore.Qt.Checked
-                self.toggle_file_visibility(file_path, is_checked)
+        project_path = item.data(QtCore.Qt.UserRole)
+
+        # Проверяем что это валидный проект (любая папка)
+        if not project_path:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Выбранный элемент не является проектом!"
+            )
+            return
+
+        # Проверяем что это директория (любая папка)
+        if not os.path.isdir(project_path):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Выбранный элемент не является папкой проекта!"
+            )
+            return
+
+        # ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ - можно добавлять файлы
+        project_name = os.path.basename(project_path)
+
+        # Выбираем файлы для добавления
+        file_paths, _ = QtWidgets.QFileDialog.getOpenFileNames(
+            self,
+            f"Выберите файлы для добавления в проект '{project_name}'",
+            "",
+            "Поддерживаемые файлы (*.dxf *.evp *.evg *.csv);;Все файлы (*.*)"
+        )
+
+        if not file_paths:
+            return
+
+        added_count = 0
+        for file_path in file_paths:
+            try:
+                # Копируем файл в проект (ВО ВНЕШНЮЮ ПАПКУ)
+                filename = os.path.basename(file_path)
+                dest_path = os.path.join(project_path, filename)
+
+                # Если файл уже существует, добавляем суффикс
+                counter = 1
+                base_name, ext = os.path.splitext(filename)
+                while os.path.exists(dest_path):
+                    filename = f"{base_name}_{counter}{ext}"
+                    dest_path = os.path.join(project_path, filename)
+                    counter += 1
+
+                import shutil
+                shutil.copy2(file_path, dest_path)
+                added_count += 1
+
+                # Добавляем файл в дерево
+                self.treeView.add_file_to_project_tree(item, dest_path)
+                print(f"Файл добавлен в проект '{project_name}': {filename}")
+
+            except Exception as e:
+                print(f"Ошибка копирования файла {file_path}: {e}")
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Ошибка",
+                    f"Не удалось скопировать файл {os.path.basename(file_path)}: {str(e)}"
+                )
+
+        # Обновляем дерево (раскрываем проект чтобы показать добавленные файлы)
+        self.treeView.expand(current_index)
+
+        if added_count > 0:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Успех",
+                f"Добавлено {added_count} файлов в проект '{project_name}'!\n"
+                f"Файлы сохранены в: {project_path}"
+            )
+        else:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Информация",
+                "Файлы не были добавлены в проект."
+            )
 
     def toggle_file_visibility(self, file_path, visible):
         """Включает/выключает отображение объектов из файла"""
@@ -315,19 +432,25 @@ class MainWindow(QtWidgets.QMainWindow):
                     print(f"Загрузка нового DXF файла: {file_path}")
                     self.glWidget.add_object_dxf(file_path)
 
-                    # Находим последний добавленный объект (предполагаем, что это наш DXF)
-                    new_obj_id = list(self.glWidget.objects.keys())[-1]
-                    self.loaded_files[file_path] = [new_obj_id]
-
-                    print(f"DXF файл загружен: {file_path}, объект ID: {new_obj_id}")
+                    # Проверяем что объект был создан
+                    if len(self.glWidget.objects) == 0:
+                        QtWidgets.QMessageBox.warning(self, "Предупреждение",
+                                                      f"DXF файл {os.path.basename(file_path)} не содержит 3D геометрии.\n"
+                                                      f"Был создан объект-заглушка.")
+                    else:
+                        # Находим последний добавленный объект
+                        new_obj_id = list(self.glWidget.objects.keys())[-1]
+                        self.loaded_files[file_path] = [new_obj_id]
+                        print(f"DXF файл загружен: {file_path}, объект ID: {new_obj_id}")
 
                 except Exception as e:
                     print(f"Ошибка загрузки DXF файла {file_path}: {e}")
-                    QtWidgets.QMessageBox.warning(self, "Ошибка", f"Не удалось загрузить DXF файл: {str(e)}")
+                    QtWidgets.QMessageBox.warning(self, "Ошибка",
+                                                  f"Не удалось загрузить DXF файл: {str(e)}\n"
+                                                  f"Файл может быть пустым или использовать неподдерживаемые объекты.")
         else:
-            # Выключаем DXF - отключаем объекты, но не удаляем их
+            # ВЫКЛЮЧАЕМ DXF
             if file_path in self.loaded_files:
-                print(f"Выключение объектов DXF: {self.loaded_files[file_path]}")
                 for obj_id in self.loaded_files[file_path]:
                     if obj_id in self.glWidget.objects:
                         self.glWidget.objects[obj_id].enabled = False
@@ -335,24 +458,64 @@ class MainWindow(QtWidgets.QMainWindow):
                         print(f"DXF объект {obj_id} выключен")
 
     def toggle_evp_file(self, file_path, visible):
-        """Включает/выключает EVP файл"""
+        """Включает/выключает EVP файл - С СОХРАНЕННОЙ ПРОЗРАЧНОСТЬЮ"""
+        print(f"toggle_evp_file: {file_path}, visible: {visible}")
+
         if visible:
-            # Загружаем EVP если еще не загружен
             if file_path not in self.loaded_files:
+                print(f"🔄 Загрузка EVP файла: {file_path}")
                 events_data = self.parse_evp_file(file_path)
+
                 object_ids = []
                 for event in events_data:
                     try:
-                        # Простое преобразование: меняем Y и Z местами
                         x, y, z = self.transform_event_coordinates(event['x'], event['y'], event['z'])
-                        self.glWidget.add_object_event(x, y, z, event['event_type'], event['energy'])
-                        object_ids.append(list(self.glWidget.objects.keys())[-1])
+                        energy = event['energy']
+
+                        # Получаем настройки визуализации И ПРОЗРАЧНОСТЬ
+                        visualization_type = "spheres"
+                        base_color = [1.0, 0.0, 0.0]
+                        opacity = 1.0  # по умолчанию
+
+                        if hasattr(self, 'properties_field') and file_path in self.properties_field.file_properties:
+                            props = self.properties_field.file_properties[file_path]
+
+                            # Проверяем energy_ranges
+                            if 'energy_ranges' in props:
+                                thresholds = sorted(props['energy_ranges'].keys(), reverse=True)
+                                for thresh in thresholds:
+                                    if energy >= thresh:
+                                        range_props = props['energy_ranges'][thresh]
+                                        visualization_type = range_props.get('visualization', 'spheres')
+                                        base_color = range_props.get('color', [1.0, 0.0, 0.0])
+                                        # Получаем сохраненную прозрачность для этого диапазона
+                                        opacity = range_props.get('opacity', 1.0)
+
+                                        # Формируем RGBA цвет с сохраненной прозрачностью
+                                        rgba_color = list(base_color[:3]) + [opacity]
+                                        break
+
+                        print(f"🎯 Создание: тип={visualization_type}, прозрачность={opacity}, цвет={rgba_color}")
+
+                        # Создаем объект с нужным типом И ПРОЗРАЧНОСТЬЮ
+                        if visualization_type == "spheres":
+                            new_obj = self.glWidget.add_object_event(x, y, z, event['event_type'], energy, rgba_color)
+                        elif visualization_type == "beach_balls":
+                            new_obj = self.glWidget.add_object_beach_ball(x, y, z, event['event_type'], energy, rgba_color)
+                        elif visualization_type == "points":
+                            new_obj = self.glWidget.add_object_point(x, y, z, event['event_type'], energy, rgba_color)
+                        else:
+                            new_obj = self.glWidget.add_object_event(x, y, z, event['event_type'], energy, rgba_color)
+
+                        new_obj_id = list(self.glWidget.objects.keys())[-1]
+                        object_ids.append(new_obj_id)
+
                     except Exception as e:
-                        print(f"Ошибка добавления события: {e}")
+                        print(f"❌ Ошибка добавления события: {e}")
                         continue
 
                 self.loaded_files[file_path] = object_ids
-                print(f"EVP файл загружен: {file_path}, объектов: {len(object_ids)}")
+                print(f"✅ Файл загружен с сохраненной прозрачностью, объектов: {len(object_ids)}")
             else:
                 # Включаем уже загруженные события
                 for obj_id in self.loaded_files[file_path]:
@@ -360,7 +523,7 @@ class MainWindow(QtWidgets.QMainWindow):
                         self.glWidget.objects[obj_id].enabled = True
                         self.glWidget.objects[obj_id].mesh.enabled = True
         else:
-            # Выключаем события из EVP
+            # Выключаем события
             if file_path in self.loaded_files:
                 for obj_id in self.loaded_files[file_path]:
                     if obj_id in self.glWidget.objects:
@@ -455,143 +618,381 @@ class MainWindow(QtWidgets.QMainWindow):
         print(f"Обработка CSV файла: {file_path}, visible: {visible}")
         # Здесь можно добавить логику для других CSV файлов
 
-    def closeSelectedProject(self):
-        index = self.treeView.currentIndex()
-        if not index.isValid():
-            QtWidgets.QMessageBox.warning(self, "Ошибка", "Проект не выбран")
-            return
-
-        item = self.model.itemFromIndex(index)
-        parent = item.parent()
-        if parent is None:
-            # Удаляем проект и все его объекты
-            project_path = item.data(QtCore.Qt.UserRole)
-            self.remove_project_objects(project_path)
-            self.model.removeRow(item.row())
-        else:
-            QtWidgets.QMessageBox.warning(self, "Ошибка", "Выделена не корневая папка")
-
     def remove_project_objects(self, project_path):
         """Удаляет все объекты, связанные с проектом"""
-        if project_path in self.project_data:
-            # Удаляем все файлы проекта из loaded_files
-            for file_list in self.project_data[project_path].values():
-                for file_path in file_list:
-                    if file_path in self.loaded_files:
-                        # Удаляем объекты из сцены
-                        for obj_id in self.loaded_files[file_path]:
-                            if obj_id in self.glWidget.objects:
-                                del self.glWidget.objects[obj_id]
-                        del self.loaded_files[file_path]
+        print(f"Удаление объектов проекта: {project_path}")
 
-            del self.project_data[project_path]
+        # Ищем все файлы, связанные с этим проектом
+        files_to_remove = []
+        for file_path in list(self.loaded_files.keys()):
+            if file_path.startswith(project_path):
+                files_to_remove.append(file_path)
 
-    def initMenu(self):
-        fileMenu = self.menuBar.addMenu('Файл')
-        viewMenu = self.menuBar.addMenu('Вид')
+        # Удаляем объекты из сцены
+        for file_path in files_to_remove:
+            if file_path in self.loaded_files:
+                for obj_id in self.loaded_files[file_path]:
+                    if obj_id in self.glWidget.objects:
+                        del self.glWidget.objects[obj_id]
+                        print(f"Удален объект {obj_id}")
+                del self.loaded_files[file_path]
+                print(f"Удалена информация о файле: {file_path}")
 
-        exitAction = QtWidgets.QAction('Закрыть проект', self)
-        openFileAction = QtWidgets.QAction('Открыть проект', self)
-        openFileAction.triggered.connect(self.openProject)
+    def change_event_visualization(self, obj_id, visualization_type, base_color):
+        """Изменяет визуализацию конкретного события - С ПЕРЕДАЧЕЙ ЦВЕТА"""
+        try:
+            if obj_id not in self.glWidget.objects:
+                return
 
-        # Действия для управления видом
-        expandAllAction = QtWidgets.QAction('Раскрыть всё', self)
-        collapseAllAction = QtWidgets.QAction('Свернуть всё', self)
+            obj = self.glWidget.objects[obj_id]
+            if obj.obj_type != "event":
+                return
 
-        expandAllAction.triggered.connect(self.treeView.expandAll)
-        collapseAllAction.triggered.connect(self.treeView.collapseAll)
+            # Получаем параметры события
+            x, y, z = obj.location
+            event_type = obj.data.get("type", "unknown")
+            energy = obj.data.get("energy", 1.0)
 
-        exitAction.triggered.connect(self.closeSelectedProject)
-        fileMenu.addAction(openFileAction)
-        fileMenu.addAction(exitAction)
+            if len(base_color) == 3:
+                color_to_use = base_color + [1.0]  # RGB -> RGBA
+            else:
+                color_to_use = base_color
 
-        # Кастомный заголовок без лишних отступов
-        header_widget = QtWidgets.QWidget()
-        header_layout = QtWidgets.QHBoxLayout(header_widget)
-        header_layout.setContentsMargins(12, 2, 12, 2)
-        header_label = QtWidgets.QLabel("Открытые проекты")
-        header_label.setStyleSheet("color: gray; font-size: 9pt; padding: 0px;")
-        header_layout.addWidget(header_label)
+            print(f"🎨 Используемый цвет: {color_to_use}")
 
-        header_action = QtWidgets.QWidgetAction(viewMenu)
-        header_action.setDefaultWidget(header_widget)
-        viewMenu.addAction(header_action)
+            if hasattr(obj, 'mesh'):
+                self.cleanup_mesh_vbo(obj.mesh)
 
-        # Кастомный разделитель с отступами по бокам
-        separator_widget = QtWidgets.QWidget()
-        separator_layout = QtWidgets.QHBoxLayout(separator_widget)
-        separator_layout.setContentsMargins(8, 0, 8, 4)  # Отступы слева и справа
+            # Удаляем старый объект
+            del self.glWidget.objects[obj_id]
 
-        separator_line = QtWidgets.QWidget()
-        separator_line.setFixedHeight(1)
-        separator_line.setStyleSheet("background-color: #c0c0c0;")
-        separator_layout.addWidget(separator_line)
+            # Создаем новый объект с выбранной визуализацией И ПЕРЕДАЕМ ЦВЕТ
+            if visualization_type == "spheres":
+                new_obj = self.glWidget.add_object_event(x, y, z, event_type, energy, color_to_use)
+            elif visualization_type == "beach_balls":
+                new_obj = self.glWidget.add_object_beach_ball(x, y, z, event_type, energy, color_to_use)
+            elif visualization_type == "points":
+                new_obj = self.glWidget.add_object_point(x, y, z, event_type, energy, color_to_use)
+            else:
+                new_obj = self.glWidget.add_object_event(x, y, z, event_type, energy, color_to_use)
 
-        separator_action = QtWidgets.QWidgetAction(viewMenu)
-        separator_action.setDefaultWidget(separator_widget)
-        viewMenu.addAction(separator_action)
+            # Сохраняем тот же ID
+            self.glWidget.objects[obj_id] = new_obj
+            print(f"✅ Визуализация изменена для объекта {obj_id}")
 
-        viewMenu.addAction(expandAllAction)
-        viewMenu.addAction(collapseAllAction)
+        except Exception as e:
+            print(f"❌ Ошибка в change_event_visualization: {e}")
+            import traceback
+            traceback.print_exc()
 
-    def initToolBar(self):
-        self.menuToolBar = QtWidgets.QToolBar('Меню с иконками')
-        self.menuToolBar.setMovable(False)
-        self.addToolBar(QtCore.Qt.TopToolBarArea, self.menuToolBar)
+    def cleanup_mesh_vbo(self, mesh):
+        """Очищает VBO меша из памяти OpenGL"""
+        try:
+            # Удаляем VBO если они существуют
+            if hasattr(mesh, 'verticesVBO') and mesh.verticesVBO:
+                mesh.verticesVBO.delete()
+            if hasattr(mesh, 'colorsFacesVBO') and mesh.colorsFacesVBO:
+                mesh.colorsFacesVBO.delete()
+            if hasattr(mesh, 'colorsEdgesVBO') and mesh.colorsEdgesVBO:
+                mesh.colorsEdgesVBO.delete()
+            if hasattr(mesh, 'colorsHoveredVBO') and mesh.colorsHoveredVBO:
+                mesh.colorsHoveredVBO.delete()
+            if hasattr(mesh, 'colorsSelectedVBO') and mesh.colorsSelectedVBO:
+                mesh.colorsSelectedVBO.delete()
+            if hasattr(mesh, 'colorsEdgesActiveVBO') and mesh.colorsEdgesActiveVBO:
+                mesh.colorsEdgesActiveVBO.delete()
+        except Exception as e:
+            print(f"⚠️ Ошибка при очистке VBO: {e}")
 
-        icon1 = QtGui.QIcon('icons/x.png')
-        icon3 = QtGui.QIcon('icons/y.png')
-        icon2 = QtGui.QIcon('icons/z.png')
+    # В класс MainWindow добавим метод для изменения стиля отображения EVP файлов
+    def change_evp_visualization(self, file_path, visualization_type):
+        """Изменяет способ визуализации для EVP файла"""
+        print(f"Изменение визуализации для {file_path} на тип: {visualization_type}")
 
-        proj_yz = QtWidgets.QAction(icon1, '', self)
-        proj_yx = QtWidgets.QAction(icon2, '', self)
-        proj_zx = QtWidgets.QAction(icon3, '', self)
+        # Сначала скрываем текущие объекты
+        if file_path in self.loaded_files:
+            for obj_id in self.loaded_files[file_path]:
+                if obj_id in self.glWidget.objects:
+                    self.glWidget.objects[obj_id].enabled = False
 
-        self.menuToolBar.setIconSize(QtCore.QSize(24, 24))
-        self.menuToolBar.addSeparator()
+        # Перезагружаем файл с новым типом визуализации
+        events_data = self.parse_evp_file(file_path)
 
-        proj_yz.setToolTip('Вид сбоку')
-        proj_yx.setToolTip('Показать все')
-        proj_zx.setToolTip('Вид сверху')
+        # Удаляем старые объекты
+        if file_path in self.loaded_files:
+            for obj_id in self.loaded_files[file_path]:
+                if obj_id in self.glWidget.objects:
+                    del self.glWidget.objects[obj_id]
+            self.loaded_files[file_path] = []
 
-        proj_yx.triggered.connect(lambda val: self.glWidget.setArm(val))
-        proj_zx.triggered.connect(lambda checked: self.glWidget.set_perspective_top())
-        proj_yz.triggered.connect(lambda val: self.glWidget.set_perspective_side())
+        # Создаем новые объекты с выбранным типом визуализации
+        object_ids = []
+        for event in events_data:
+            try:
+                x, y, z = self.transform_event_coordinates(event['x'], event['y'], event['z'])
 
-        self.menuToolBar.addAction(proj_yx)
-        self.menuToolBar.addAction(proj_zx)
-        self.menuToolBar.addAction(proj_yz)
+                if visualization_type == "spheres":
+                    self.glWidget.add_object_event(x, y, z, event['event_type'], event['energy'])
+                elif visualization_type == "beach_balls":
+                    self.glWidget.add_object_beach_ball(x, y, z, event['event_type'], event['energy'])
+                elif visualization_type == "points":
+                    self.glWidget.add_object_point(x, y, z, event['event_type'], event['energy'])
 
-    def initGUI(self):
-        central_widget = QtWidgets.QWidget()
-        gui_layout = QtWidgets.QHBoxLayout()
+                new_obj_id = list(self.glWidget.objects.keys())[-1]
+                object_ids.append(new_obj_id)
 
-        central_widget.setLayout(gui_layout)
-        self.setCentralWidget(central_widget)
+            except Exception as e:
+                print(f"Ошибка добавления события: {e}")
+                continue
 
-        # Создаем splitter для возможности изменения размеров
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        self.loaded_files[file_path] = object_ids
+        print(f"EVP файл перезагружен с типом визуализации: {visualization_type}, объектов: {len(object_ids)}")
 
-        # Добавляем treeView с минимальным и максимальным размером
-        self.treeView.setMinimumWidth(200)
-        self.treeView.setMaximumWidth(600)
+    def show_properties_field(self, file_path, visualization_type):
+        """Показывает поле свойств для выбранного файла"""
+        try:
+            print(f"=== ПОКАЗЫВАЕМ СВОЙСТВА ДЛЯ: {os.path.basename(file_path)} ===")
 
-        # Создаем правую панель
-        right_widget = QtWidgets.QWidget()
-        right_layout = QtWidgets.QVBoxLayout(right_widget)
-        right_layout.addWidget(self.glWidget)
+            # ПОКАЗЫВАЕМ поле свойств (если было скрыто)
+            if self.properties_field.isHidden():
+                self.properties_field.show()
 
-        # Добавляем виджеты в splitter
-        splitter.addWidget(self.treeView)
-        splitter.addWidget(right_widget)
+                # Обновляем размеры splitter чтобы было видно свойства
+                if hasattr(self, 'left_splitter'):
+                    self.left_splitter.setSizes([300, 200])  # Дерево: 300, Свойства: 200
 
-        # Устанавливаем начальные размеры (treeView - 300px, GLWidget - остальное)
-        splitter.setSizes([300, 500])
+            # Показываем свойства для файла
+            self.properties_field.show_event_properties(file_path, visualization_type)
 
-        gui_layout.addWidget(splitter)
+            print("Поле свойств успешно показано")
 
-    def initTimer(self):
-        timer = QtCore.QTimer(self)
-        timer.setInterval(20)  # 20 мс
-        timer.timeout.connect(self.glWidget.updateGL)
-        timer.start()
+        except Exception as e:
+            print(f"Ошибка при показе поля свойств: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def hide_properties_field(self):
+        """Скрывает поле свойств"""
+        if hasattr(self, 'left_splitter'):
+            # Скрываем свойства и отдаем все место дереву
+            self.properties_field.hide()
+            self.left_splitter.setSizes([500, 0])
+
+    def closeEvent(self, event):
+        """Сохраняем настройки при закрытии приложения"""
+        try:
+            # Сохраняем настройки свойств
+            if hasattr(self, 'properties_field'):
+                self.properties_field.save_properties_settings()
+
+            # Сохраняем настройки проектов
+            if hasattr(self, 'treeView'):
+                self.treeView.save_projects()
+
+            print("Все настройки сохранены")
+
+        except Exception as e:
+            print(f"Ошибка при сохранении настроек: {e}")
+
+        event.accept()
+
+    def reload_file_with_settings(self, file_path):
+        """Перезагружает файл с применением сохраненных настроек"""
+        try:
+            print(f"🔄 Перезагрузка файла: {os.path.basename(file_path)}")
+
+            # Сохраняем текущее состояние видимости
+            was_visible = file_path in self.loaded_files
+
+            # Полностью удаляем файл из загруженных
+            if file_path in self.loaded_files:
+                # Удаляем все объекты этого файла из сцены
+                for obj_id in self.loaded_files[file_path]:
+                    if obj_id in self.glWidget.objects:
+                        # Очищаем VBO перед удалением
+                        obj = self.glWidget.objects[obj_id]
+                        if hasattr(obj, 'mesh'):
+                            self.cleanup_mesh_vbo(obj.mesh)
+                        del self.glWidget.objects[obj_id]
+                # Удаляем запись о файле
+                del self.loaded_files[file_path]
+                print(f"🗑️ Удалены объекты файла {os.path.basename(file_path)}")
+
+            # Загружаем файл заново
+            if was_visible:
+                print(f"🔄 Загружаем файл заново...")
+                if file_path.lower().endswith('.evp'):
+                    self.toggle_evp_file(file_path, True)
+                elif file_path.lower().endswith('.dxf'):
+                    self.toggle_dxf_file(file_path, True)
+                elif file_path.lower().endswith('.csv'):
+                    if os.path.basename(file_path).lower() == "detectors.csv":
+                        self.toggle_detectors_file(file_path, True)
+                    elif os.path.basename(file_path).lower() == "events.csv":
+                        self.toggle_events_csv_file(file_path, True)
+                    else:
+                        self.toggle_generic_csv_file(file_path, True)
+
+                print(f"✅ Файл {os.path.basename(file_path)} перезагружен")
+
+        except Exception as e:
+            print(f"❌ Ошибка при перезагрузке файла: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def reload_file_range(self, file_path, energy_threshold, visualization_type):
+        """Перезагружает только объекты указанного диапазона энергии"""
+        try:
+            print(f"🔄 Перезагрузка диапазона {energy_threshold} файла {os.path.basename(file_path)}")
+
+            if file_path not in self.loaded_files:
+                return
+
+            obj_ids = self.loaded_files[file_path].copy()
+
+            for obj_id in obj_ids:
+                if obj_id in self.glWidget.objects:
+                    obj = self.glWidget.objects[obj_id]
+                    if obj.obj_type == "event":
+                        energy = obj.data.get("energy", 0)
+
+                        try:
+                            energy_float = float(energy) if energy else 0.0
+                        except (ValueError, TypeError):
+                            energy_float = 0.0
+
+                        # Проверяем попадает ли объект в нужный диапазон
+                        if energy_float >= energy_threshold:
+                            # Получаем параметры объекта
+                            x, y, z = obj.location
+                            event_type = obj.data.get("type", "unknown")
+
+                            # Очищаем старый объект
+                            if hasattr(obj, 'mesh'):
+                                self.cleanup_mesh_vbo(obj.mesh)
+
+                            # Удаляем старый объект
+                            del self.glWidget.objects[obj_id]
+
+                            # Получаем сохраненные настройки для нового типа
+                            if hasattr(self, 'properties_field'):
+                                props = self.properties_field.file_properties.get(file_path, {})
+                                color = [1.0, 0.0, 0.0]
+                                opacity = 1.0
+
+                                if 'energy_ranges' in props:
+                                    range_props = props['energy_ranges'].get(energy_threshold, {})
+                                    color = range_props.get('color', color)
+                                    opacity = range_props.get('opacity', 1.0)
+
+                                rgba_color = list(color[:3]) + [opacity]
+
+                                # Создаем новый объект с нужным типом
+                                if visualization_type == "spheres":
+                                    new_obj = self.glWidget.add_object_event(x, y, z, event_type, energy_float,
+                                                                             rgba_color)
+                                elif visualization_type == "beach_balls":
+                                    new_obj = self.glWidget.add_object_beach_ball(x, y, z, event_type, energy_float,
+                                                                                  rgba_color)
+                                elif visualization_type == "points":
+                                    new_obj = self.glWidget.add_object_point(x, y, z, event_type, energy_float,
+                                                                             rgba_color)
+                                else:
+                                    new_obj = self.glWidget.add_object_event(x, y, z, event_type, energy_float,
+                                                                             rgba_color)
+
+                                # Сохраняем тот же ID
+                                self.glWidget.objects[obj_id] = new_obj
+
+            print(f"✅ Диапазон {energy_threshold} перезагружен")
+
+        except Exception as e:
+            print(f"❌ Ошибка перезагрузки диапазона: {e}")
+
+    def reload_file_with_updated_range(self, file_path, energy_threshold, visualization_type, rgba_color):
+        """Перезагружает файл с обновленным диапазоном"""
+        try:
+            print(f"🔄 Перезагрузка диапазона {energy_threshold} файла {os.path.basename(file_path)}")
+            print(f"📊 Тип: {visualization_type}, Цвет: {rgba_color}")
+
+            # Сохраняем видимость
+            was_visible = file_path in self.loaded_files
+
+            # Удаляем файл если загружен
+            if was_visible:
+                self.toggle_evp_file(file_path, False)
+
+            # Обновляем настройки в properties_field
+            if hasattr(self, 'properties_field'):
+                if file_path not in self.properties_field.file_properties:
+                    self.properties_field.initialize_file_properties(file_path, visualization_type)
+
+                # Устанавливаем правильный тип для ВСЕГО файла
+                self.properties_field.file_properties[file_path]['type'] = visualization_type
+
+                # Обновляем настройки для конкретного диапазона
+                if ('energy_ranges' in self.properties_field.file_properties[file_path] and
+                        energy_threshold in self.properties_field.file_properties[file_path]['energy_ranges']):
+                    range_props = self.properties_field.file_properties[file_path]['energy_ranges'][energy_threshold]
+                    range_props['visualization'] = visualization_type
+                    range_props['opacity'] = rgba_color[3]
+                    range_props['color'] = rgba_color[:3]
+
+                # Сохраняем настройки
+                self.properties_field.save_properties_settings()
+
+            # Загружаем файл заново
+            if was_visible:
+                self.toggle_evp_file(file_path, True)
+
+            print(f"✅ Файл перезагружен с обновленным диапазоном")
+
+        except Exception as e:
+            print(f"❌ Ошибка перезагрузки диапазона: {e}")
+            import traceback
+            traceback.print_exc()
+
+    # В MainWindow.py добавьте:
+    def reload_file_with_settings(self, file_path):
+        """Перезагружает файл с применением сохраненных настроек"""
+        try:
+            print(f"🔄 Перезагрузка файла с настройками: {os.path.basename(file_path)}")
+
+            # Сохраняем текущее состояние видимости
+            was_visible = file_path in self.loaded_files
+
+            # Полностью удаляем файл из загруженных
+            if file_path in self.loaded_files:
+                # Удаляем все объекты этого файла из сцены
+                for obj_id in self.loaded_files[file_path]:
+                    if obj_id in self.glWidget.objects:
+                        # Очищаем VBO перед удалением
+                        obj = self.glWidget.objects[obj_id]
+                        if hasattr(obj, 'mesh'):
+                            self.cleanup_mesh_vbo(obj.mesh)
+                        del self.glWidget.objects[obj_id]
+                # Удаляем запись о файле
+                del self.loaded_files[file_path]
+                print(f"🗑️ Удалены объекты файла {os.path.basename(file_path)}")
+
+            # Загружаем файл заново с новыми настройками
+            if was_visible:
+                print(f"🔄 Загружаем файл заново с новыми настройками...")
+                if file_path.lower().endswith('.evp'):
+                    self.toggle_evp_file(file_path, True)
+                elif file_path.lower().endswith('.dxf'):
+                    self.toggle_dxf_file(file_path, True)
+                elif file_path.lower().endswith('.csv'):
+                    if os.path.basename(file_path).lower() == "detectors.csv":
+                        self.toggle_detectors_file(file_path, True)
+                    elif os.path.basename(file_path).lower() == "events.csv":
+                        self.toggle_events_csv_file(file_path, True)
+                    else:
+                        self.toggle_generic_csv_file(file_path, True)
+
+                print(f"✅ Файл {os.path.basename(file_path)} перезагружен с новыми настройками")
+
+        except Exception as e:
+            print(f"❌ Ошибка при перезагрузке файла: {e}")
+            import traceback
+            traceback.print_exc()
